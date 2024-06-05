@@ -20,7 +20,7 @@ impl Network {
         }
     }
 
-    fn forward_propagation(&mut self, input: DVector<f64>) -> DVector<f64> {
+    fn forward_propagation(&mut self, input: DVector<f32>) -> DVector<f32> {
         let mut output = input;
         for layer in self.layers.iter_mut() {
             output = layer.forward_propagation(output);
@@ -28,7 +28,7 @@ impl Network {
         output
     }
 
-    fn backward_propagation(&mut self, cost_derivative: DVector<f64>) {
+    fn backward_propagation(&mut self, cost_derivative: DVector<f32>) {
         let learning_rate = 0.002;
         let mut factor = cost_derivative;
         for layer in self.layers.iter_mut().rev() {
@@ -36,26 +36,26 @@ impl Network {
         }
     }
 
-    fn cost(output: &DVector<f64>, target: &DVector<f64>) -> f64 {
+    fn cost(output: &DVector<f32>, target: &DVector<f32>) -> f32 {
         let n = target.len();
-        -DVector::<f64>::from_fn(n, |i, _| target[i] * output[i].ln()).sum()
+        -DVector::<f32>::from_fn(n, |i, _| target[i] * output[i].ln()).sum()
     }
 
-    fn grad_cost(output: &DVector<f64>, target: &DVector<f64>) -> DVector<f64> {
+    fn grad_cost(output: &DVector<f32>, target: &DVector<f32>) -> DVector<f32> {
         let n = target.len();
-        -DVector::<f64>::from_fn(n, |i, _| target[i] / output[i])
+        -DVector::<f32>::from_fn(n, |i, _| target[i] / output[i])
     }
 
-    fn validate(&mut self, validation_inputs: &Vec<DVector<f64>>, validation_outputs: &Vec<DVector<f64>>) -> f64 {
+    fn validate(&mut self, validation_inputs: &Vec<DVector<f32>>, validation_outputs: &Vec<DVector<f32>>) -> f32 {
         let accuracy = (0..validation_inputs.len()).into_iter().map(|i| {
             let prediction = self.predict(&validation_inputs[i]);
             if prediction.argmax().0 == validation_outputs[i].argmax().0 { 1.0 } else { 0.0 }
-        }).sum::<f64>() / validation_outputs.len() as f64;
+        }).sum::<f32>() / validation_outputs.len() as f32;
 
         accuracy
     }
 
-    pub fn train(&mut self, train_inputs: &Vec<DVector<f64>>, train_outputs: &Vec<DVector<f64>>, valid_inputs: &Vec<DVector<f64>>, valid_outputs: &Vec<DVector<f64>>, epochs: usize) {
+    pub fn train(&mut self, train_inputs: &Vec<DVector<f32>>, train_outputs: &Vec<DVector<f32>>, valid_inputs: &Vec<DVector<f32>>, valid_outputs: &Vec<DVector<f32>>, epochs: usize) {
         let n = train_inputs.len();
         let n_batches = n;
         let mut loss_curve = vec![];
@@ -64,7 +64,7 @@ impl Network {
         let pb = ProgressBar::new((epochs * n_batches) as u64);
         pb.set_style(ProgressStyle::with_template("{spinner:.blue} [{elapsed_precise}] Status : [{bar:50.green/blue}] {msg} ({eta})")
             .unwrap()
-            .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
+            .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f32()).unwrap())
             .progress_chars("=> "));
 
         for epoch in 0..epochs {
@@ -78,14 +78,14 @@ impl Network {
                     pb.abandon();
                     plot_loss(loss_curve);
                     plot_accuracy(accuracy_curve);
-                    println!("Training failed ! NaN Loss detected... ({:.1}s)", pb.elapsed().as_secs_f64());
+                    println!("Training failed ! NaN Loss detected... ({:.1}s)", pb.elapsed().as_secs_f32());
                     return
                 }
 
                 pb.inc(1);
                 pb.set_message(format!(
                     "Progress : {:.1}%, {}/{} batches, epoch {}/{}",
-                    100.0 * (epoch * n_batches + i + 1) as f64 / (epochs * n_batches) as f64,
+                    100.0 * (epoch * n_batches + i + 1) as f32 / (epochs * n_batches) as f32,
                     i + 1, n_batches, epoch + 1, epochs
                 ));
             }
@@ -95,19 +95,19 @@ impl Network {
         pb.finish();
         plot_loss(loss_curve);
         plot_accuracy(accuracy_curve);
-        println!("Model finished training ! ({:.1}s)", pb.elapsed().as_secs_f64());
+        println!("Model finished training ! ({:.1}s)", pb.elapsed().as_secs_f32());
     }
 
-    pub fn test_accuracy(&mut self, test_inputs: &Vec<DVector<f64>>, test_outputs: &Vec<DVector<f64>>) -> f64 {
+    pub fn test_accuracy(&mut self, test_inputs: &Vec<DVector<f32>>, test_outputs: &Vec<DVector<f32>>) -> f32 {
         self.validate(test_inputs, test_outputs)
     }
 
-    pub fn predict(&mut self, input: &DVector<f64>) -> DVector<f64> {
+    pub fn predict(&mut self, input: &DVector<f32>) -> DVector<f32> {
         self.forward_propagation(input.clone())
     }
 }
 
-fn plot_loss(loss: Vec<f64>) {
+fn plot_loss(loss: Vec<f32>) {
     let n = loss.len();
     let root_drawing_area = BitMapBackend::new("images/loss_curve.png", (1024, 768))
         .into_drawing_area();
@@ -130,7 +130,7 @@ fn plot_loss(loss: Vec<f64>) {
     root_drawing_area.present().unwrap();
 }
 
-fn plot_accuracy(accuracy: Vec<f64>) {
+fn plot_accuracy(accuracy: Vec<f32>) {
     let n = accuracy.len();
     let root_drawing_area = BitMapBackend::new("images/accuracy_curve.png", (1024, 768))
         .into_drawing_area();

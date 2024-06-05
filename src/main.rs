@@ -17,11 +17,11 @@ use crate::network::Network;
 struct NeuralNetwork {
     layers: usize,
     batch_size: usize,
-    weights: Vec<DMatrix<f64>>,
-    bias: Vec<DMatrix<f64>>,
+    weights: Vec<DMatrix<f32>>,
+    bias: Vec<DMatrix<f32>>,
 
-    weighted_sums: Vec<DMatrix<f64>>,
-    activations: Vec<DMatrix<f64>>
+    weighted_sums: Vec<DMatrix<f32>>,
+    activations: Vec<DMatrix<f32>>
 }
 
 impl NeuralNetwork {
@@ -34,8 +34,8 @@ impl NeuralNetwork {
         let n_layers = layers.len();
         let mut n_cols = 784;
         for n_rows in layers {
-            weights.push(DMatrix::<f64>::from_distribution(n_rows, n_cols, &Normal::new(0.0, f64::sqrt(2.0 / n_cols as f64)).unwrap(), rng));
-            bias.push(DMatrix::<f64>::zeros(n_rows, batch_size));
+            weights.push(DMatrix::<f32>::from_distribution(n_rows, n_cols, &Normal::new(0.0, f32::sqrt(2.0 / n_cols as f32)).unwrap(), rng));
+            bias.push(DMatrix::<f32>::zeros(n_rows, batch_size));
             n_cols = n_rows;
         }
 
@@ -45,19 +45,19 @@ impl NeuralNetwork {
             weights,
             bias,
 
-            weighted_sums: vec![DMatrix::<f64>::zeros(1, 1); n_layers],
-            activations: vec![DMatrix::<f64>::zeros(1, 1); n_layers]
+            weighted_sums: vec![DMatrix::<f32>::zeros(1, 1); n_layers],
+            activations: vec![DMatrix::<f32>::zeros(1, 1); n_layers]
         }
     }
 
-    fn train(&mut self, training_inputs: &Vec<DVector<f64>>, expected_outputs: &Vec<DVector<f64>>, validation_inputs: &Vec<DVector<f64>>, validation_outputs: &Vec<DVector<f64>>, epochs: usize) -> (Vec<f64>, Vec<f64>) {
+    fn train(&mut self, training_inputs: &Vec<DVector<f32>>, expected_outputs: &Vec<DVector<f32>>, validation_inputs: &Vec<DVector<f32>>, validation_outputs: &Vec<DVector<f32>>, epochs: usize) -> (Vec<f32>, Vec<f32>) {
         let (inputs, outputs) = self.create_batches(training_inputs, expected_outputs);
         let n_batches = inputs.len();
 
         let pb = ProgressBar::new((epochs * n_batches) as u64);
         pb.set_style(ProgressStyle::with_template("{spinner:.blue} [{elapsed_precise}] Status : [{bar:50.green/blue}] {msg} ({eta})")
             .unwrap()
-            .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
+            .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f32()).unwrap())
             .progress_chars("=> "));
 
         let mut loss_values = vec![];
@@ -81,7 +81,7 @@ impl NeuralNetwork {
                 pb.inc(1);
                 pb.set_message(format!(
                     "Progress : {:.1}%, {}/{} batches, epoch {}/{}",
-                    100.0 * (epoch * n_batches + i + 1) as f64 / (epochs * n_batches) as f64,
+                    100.0 * (epoch * n_batches + i + 1) as f32 / (epochs * n_batches) as f32,
                     i + 1, n_batches, epoch + 1, epochs
                 ));
             }
@@ -92,25 +92,25 @@ impl NeuralNetwork {
         }
 
         pb.finish();
-        println!("Model finished training ! ({:.1}s)", pb.elapsed().as_secs_f64());
+        println!("Model finished training ! ({:.1}s)", pb.elapsed().as_secs_f32());
         (loss_values, accuracies)
     }
 
-    fn create_batches(&self, inputs: &Vec<DVector<f64>>, outputs: &Vec<DVector<f64>>) -> (Vec<DMatrix<f64>>, Vec<DMatrix<f64>>) {
+    fn create_batches(&self, inputs: &Vec<DVector<f32>>, outputs: &Vec<DVector<f32>>) -> (Vec<DMatrix<f32>>, Vec<DMatrix<f32>>) {
         let n_batches = inputs.len() / self.batch_size;
         let mut input_matrices = vec![];
         let mut output_matrices = vec![];
         for i in 0..n_batches {
             let index = i * self.batch_size;
-            let input_matrix = DMatrix::<f64>::from_columns(&inputs[index..(index + self.batch_size)]);
-            let output_matrix = DMatrix::<f64>::from_columns(&outputs[index..(index + self.batch_size)]);
+            let input_matrix = DMatrix::<f32>::from_columns(&inputs[index..(index + self.batch_size)]);
+            let output_matrix = DMatrix::<f32>::from_columns(&outputs[index..(index + self.batch_size)]);
             input_matrices.push(input_matrix);
             output_matrices.push(output_matrix);
         }
         (input_matrices, output_matrices)
     }
 
-    fn forward_propagation(&mut self, input: &DMatrix<f64>) -> DMatrix<f64> {
+    fn forward_propagation(&mut self, input: &DMatrix<f32>) -> DMatrix<f32> {
         let mut output = input.clone();
         for k in 0..self.layers {
             self.weighted_sums[k] = self.weights[k].clone() * output + self.bias[k].clone();
@@ -120,12 +120,12 @@ impl NeuralNetwork {
         output
     }
 
-    fn loss(&self, prediction: &DMatrix<f64>, expected: &DMatrix<f64>) -> f64 {
+    fn loss(&self, prediction: &DMatrix<f32>, expected: &DMatrix<f32>) -> f32 {
         let loss_sum = (prediction - expected).norm_squared();
-        loss_sum / self.batch_size as f64
+        loss_sum / self.batch_size as f32
     }
 
-    fn backward_propagation(&mut self, input: &DMatrix<f64>, expected: &DMatrix<f64>) -> (Vec<DMatrix<f64>>, Vec<DMatrix<f64>>) {
+    fn backward_propagation(&mut self, input: &DMatrix<f32>, expected: &DMatrix<f32>) -> (Vec<DMatrix<f32>>, Vec<DMatrix<f32>>) {
         let (weight_gradients, bias_gradients): (Vec<_>, Vec<_>) = (0..self.batch_size).into_par_iter().map(|k| {
             let mut batch_dw = VecDeque::new();
             let mut batch_db = VecDeque::new();
@@ -140,7 +140,7 @@ impl NeuralNetwork {
                     factor = factor * product;
                 }
                 let (n, m) = self.weights[l].shape();
-                batch_dw.push_front(DMatrix::<f64>::from_fn(n, m, |i, j| {
+                batch_dw.push_front(DMatrix::<f32>::from_fn(n, m, |i, j| {
                     let a_j = if l > 0 { self.activations[l - 1].column(k)[j] } else { input.column(k)[j] };
                     factor[i] * a_j
                 }));
@@ -159,12 +159,12 @@ impl NeuralNetwork {
         }
 
         (
-            dw.into_iter().map(|x| x / self.batch_size as f64).collect(),
-            db.into_iter().map(|x| DMatrix::<f64>::from_columns(&vec![x / self.batch_size as f64; self.batch_size])).collect()
+            dw.into_iter().map(|x| x / self.batch_size as f32).collect(),
+            db.into_iter().map(|x| DMatrix::<f32>::from_columns(&vec![x / self.batch_size as f32; self.batch_size])).collect()
         )
     }
 
-    fn gradient_descent(&mut self, weight_gradients: Vec<DMatrix<f64>>, bias_gradients: Vec<DMatrix<f64>>) {
+    fn gradient_descent(&mut self, weight_gradients: Vec<DMatrix<f32>>, bias_gradients: Vec<DMatrix<f32>>) {
         let learning_rate = 0.01;
         for k in 0..self.layers {
             self.weights[k] -= learning_rate * weight_gradients[k].clone();
@@ -172,36 +172,36 @@ impl NeuralNetwork {
         }
     }
 
-    pub fn validation(&self, validation_inputs: &Vec<DVector<f64>>, validation_outputs: &Vec<DVector<f64>>) -> f64 {
+    pub fn validation(&self, validation_inputs: &Vec<DVector<f32>>, validation_outputs: &Vec<DVector<f32>>) -> f32 {
         let accuracy = (0..validation_inputs.len()).into_iter().map(|i| {
             let prediction = self.predict(&validation_inputs[i]);
             if prediction.argmax().0 == validation_outputs[i].argmax().0 { 1.0 } else { 0.0 }
-        }).sum::<f64>() / validation_outputs.len() as f64;
+        }).sum::<f32>() / validation_outputs.len() as f32;
 
         accuracy
     }
 
-    pub fn predict(&self, input: &DVector<f64>) -> DVector<f64> {
+    pub fn predict(&self, input: &DVector<f32>) -> DVector<f32> {
         let mut output = input.clone();
         for k in 0..self.layers {
             let z = self.weights[k].clone() * output + self.bias[k].column(0);
-            output = z.map(|zi| f64::max(zi, 0.1 * zi))
+            output = z.map(|zi| f32::max(zi, 0.1 * zi))
         }
         output
     }
 }
 
-fn relu(x: &DMatrix<f64>) -> DMatrix<f64> {
-    x.map(|z| f64::max(z, 0.1 * z))
+fn relu(x: &DMatrix<f32>) -> DMatrix<f32> {
+    x.map(|z| f32::max(z, 0.1 * z))
 }
 
-fn grad_relu(x: &DVector<f64>) -> DMatrix<f64> {
-    DMatrix::<f64>::from_diagonal(
+fn grad_relu(x: &DVector<f32>) -> DMatrix<f32> {
+    DMatrix::<f32>::from_diagonal(
         &x.map(|z| if z > 0.0 { 1.0 } else { 0.1 })
     )
 }
 
-fn plot_loss(loss: Vec<f64>) {
+fn plot_loss(loss: Vec<f32>) {
     let n = loss.len();
     let root_drawing_area = BitMapBackend::new("images/loss_curve.png", (1024, 768))
         .into_drawing_area();
@@ -217,14 +217,14 @@ fn plot_loss(loss: Vec<f64>) {
     chart.configure_mesh().draw().unwrap();
 
     chart.draw_series(LineSeries::new(
-        (0..n).map(|x| (x as f64, loss[x])),
+        (0..n).map(|x| (x as f64, loss[x] as f64)),
         &BLUE
     )).unwrap();
 
     root_drawing_area.present().unwrap();
 }
 
-fn plot_accuracy(accuracy: Vec<f64>) {
+fn plot_accuracy(accuracy: Vec<f32>) {
     let n = accuracy.len();
     let root_drawing_area = BitMapBackend::new("images/accuracy_curve.png", (1024, 768))
         .into_drawing_area();
@@ -240,24 +240,24 @@ fn plot_accuracy(accuracy: Vec<f64>) {
     chart.configure_mesh().draw().unwrap();
 
     chart.draw_series(LineSeries::new(
-        (0..n).map(|x| (x as f64, accuracy[x])),
+        (0..n).map(|x| (x as f64, accuracy[x] as f64)),
         &ORANGE
     )).unwrap();
 
     root_drawing_area.present().unwrap();
 }
 
-fn loss_moving_average(loss: Vec<f64>) -> Vec<f64> {
+fn loss_moving_average(loss: Vec<f32>) -> Vec<f32> {
     let n = loss.len() / 100;
-    let mut smooth_loss = vec![loss[0..(2 * n + 1)].iter().sum::<f64>() / (2 * n + 1) as f64];
+    let mut smooth_loss = vec![loss[0..(2 * n + 1)].iter().sum::<f32>() / (2 * n + 1) as f32];
     for i in (n + 1)..(loss.len() - n) {
-        let x = smooth_loss.last().unwrap() + (loss[i + n] - loss[i - n - 1]) / (2 * n + 1) as f64;
+        let x = smooth_loss.last().unwrap() + (loss[i + n] - loss[i - n - 1]) / (2 * n + 1) as f32;
         smooth_loss.push(x);
     }
     smooth_loss
 }
 
-fn draw_digit(digit: &DVector<f64>) {
+fn draw_digit(digit: &DVector<f32>) {
     println!("  — — — — — — — — — — — — — — — — — — — — — — — — — — — — ");
     for i in 0..28 {
         print!("| ");
@@ -275,15 +275,15 @@ fn draw_digit(digit: &DVector<f64>) {
     println!("  — — — — — — — — — — — — — — — — — — — — — — — — — — — — ");
 }
 
-fn prepare_inputs(inputs: Vec<u8>) -> Vec<DVector<f64>> {
+fn prepare_inputs(inputs: Vec<u8>) -> Vec<DVector<f32>> {
     inputs.chunks_exact(784)
-        .map(|x| DVector::<f64>::from_iterator(784, x.iter().map(|z| (*z as f64) / 255.0)))
+        .map(|x| DVector::<f32>::from_iterator(784, x.iter().map(|z| (*z as f32) / 255.0)))
         .collect::<Vec<_>>()
 }
 
-fn prepare_labels(labels: Vec<u8>) -> Vec<DVector<f64>> {
+fn prepare_labels(labels: Vec<u8>) -> Vec<DVector<f32>> {
     labels.iter()
-        .map(|x| DVector::<f64>::from_fn(10, |z, _| f64::from(z == (*x as usize))))
+        .map(|x| DVector::<f32>::from_fn(10, |z, _| f32::from(z == (*x as usize))))
         .collect::<Vec<_>>()
 }
 
@@ -327,7 +327,6 @@ fn main() {
 */
 
 
-    // Matrix init for softmax ????
     let mut network = Network::new(
         vec![
             Box::new(Dense::new(784, 100)),
