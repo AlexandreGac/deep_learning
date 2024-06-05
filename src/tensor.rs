@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use std::ops::{Index, IndexMut, Add, Sub, Mul};
+use std::ops::{Index, IndexMut, Add, Sub, Mul, SubAssign, Neg};
 use rand::distributions::Distribution;
 use rand::Rng;
 
@@ -41,7 +41,7 @@ impl Tensor {
         tensor
     }
 
-    pub fn map<F: FnMut(f32) -> f32>(&mut self, f: F) -> Tensor {
+    pub fn map<F: Fn(f32) -> f32>(&self, f: F) -> Tensor {
         let dims = self.dims.clone();
         let mut tensor = Self::zeros(dims);
         let n = tensor.data.len();
@@ -49,6 +49,10 @@ impl Tensor {
             tensor.data[i] = f(self.data[i]);
         }
         tensor
+    }
+
+    pub fn shape(&self) -> Vec<usize> {
+        self.dims.clone()
     }
 
     pub fn get(&self, indices: Vec<usize>) -> f32 {
@@ -150,6 +154,33 @@ impl Tensor {
 
         result
     }
+
+    pub fn sum(&self) -> f32 {
+        let n = self.data.len();
+        let mut result = 0.0;
+        for i in 0..n {
+            result += self.data[i];
+        }
+        result
+    }
+
+    pub fn argmax(&self) -> (f32, Vec<usize>) {
+        let mut max = f32::NEG_INFINITY;
+        let mut max_indices = vec![0; self.dims.len()];
+        let indices_list = self.dims.iter()
+            .map(|&k| 0..k)
+            .multi_cartesian_product();
+
+        for indices in indices_list {
+            let value = self[indices.clone()];
+            if value > max {
+                max = value;
+                max_indices = indices;
+            }
+        }
+
+        (max, max_indices)
+    }
 }
 
 impl Index<Vec<usize>> for Tensor {
@@ -189,5 +220,44 @@ impl Mul for Tensor {
 
     fn mul(self, rhs: Self) -> Self::Output {
         self.contraction(&rhs)
+    }
+}
+
+impl Mul<Tensor> for f32 {
+    type Output = Tensor;
+
+    fn mul(self, rhs: Tensor) -> Self::Output {
+        let n = rhs.data.len();
+        let dims = rhs.dims.clone();
+        let mut result = Tensor::zeros(dims);
+        for i in 0..n {
+            result.data[i] = self * rhs.data[i]
+        }
+        result
+    }
+}
+
+impl Neg for Tensor {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        let n = self.data.len();
+        let dims = self.dims.clone();
+        let mut result = Self::zeros(dims);
+        for i in 0..n {
+            result.data[i] = -self.data[i];
+        }
+
+        result
+    }
+}
+
+impl SubAssign for Tensor {
+    fn sub_assign(&mut self, rhs: Self) {
+        assert_eq!(self.dims, rhs.dims);
+        let n = self.data.len();
+        for i in 0..n {
+            self.data[i] -= rhs.data[i];
+        }
     }
 }

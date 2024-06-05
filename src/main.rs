@@ -2,19 +2,21 @@ mod layer;
 mod network;
 mod tensor;
 
-use nalgebra::{DMatrix, DVector};
 use std::collections::VecDeque;
 use std::fmt::Write;
 use std::process::exit;
 use mnist::*;
 use plotters::prelude::*;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
+use nalgebra::DVector;
 use plotters::style::full_palette::ORANGE;
 use rayon::prelude::*;
 use rand_distr::Normal;
 use crate::layer::{Dense, LeakyReLU, SoftMax};
 use crate::network::Network;
+use crate::tensor::Tensor;
 
+/*
 struct NeuralNetwork {
     layers: usize,
     batch_size: usize,
@@ -275,17 +277,19 @@ fn draw_digit(digit: &DVector<f32>) {
     }
     println!("  — — — — — — — — — — — — — — — — — — — — — — — — — — — — ");
 }
+ */
 
-fn prepare_inputs(inputs: Vec<u8>) -> Vec<DVector<f32>> {
-    inputs.chunks_exact(784)
-        .map(|x| DVector::<f32>::from_iterator(784, x.iter().map(|z| (*z as f32) / 255.0)))
-        .collect::<Vec<_>>()
+fn prepare_inputs(inputs: Vec<u8>) -> Vec<Tensor> {inputs.chunks_exact(784)
+        .map(|x| Tensor::from_fn(vec![784], |indices|
+            x[indices[0]] as f32 / 255.0
+        )).collect::<Vec<_>>()
 }
 
-fn prepare_labels(labels: Vec<u8>) -> Vec<DVector<f32>> {
+fn prepare_labels(labels: Vec<u8>) -> Vec<Tensor> {
     labels.iter()
-        .map(|x| DVector::<f32>::from_fn(10, |z, _| f32::from(z == (*x as usize))))
-        .collect::<Vec<_>>()
+        .map(|x| Tensor::from_fn(vec![10], |indices|
+            f32::from(indices[0] == (*x as usize))
+        )).collect::<Vec<_>>()
 }
 
 fn main() {
