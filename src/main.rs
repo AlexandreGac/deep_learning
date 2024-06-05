@@ -1,5 +1,6 @@
 mod layer;
 mod network;
+mod tensor;
 
 use nalgebra::{DMatrix, DVector};
 use std::collections::VecDeque;
