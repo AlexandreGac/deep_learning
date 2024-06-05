@@ -1,3 +1,6 @@
+mod layer;
+mod network;
+
 use nalgebra::{DMatrix, DVector};
 use std::collections::VecDeque;
 use std::fmt::Write;
@@ -8,6 +11,8 @@ use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use plotters::style::full_palette::ORANGE;
 use rayon::prelude::*;
 use rand_distr::Normal;
+use crate::layer::{Dense, LeakyReLU, SoftMax};
+use crate::network::Network;
 
 struct NeuralNetwork {
     layers: usize,
@@ -299,14 +304,15 @@ fn main() {
 
     let train_inputs = prepare_inputs(trn_img);
     let train_labels = prepare_labels(trn_lbl);
-    let validation_inputs = prepare_inputs(val_img);
-    let validation_labels = prepare_labels(val_lbl);
+    let valid_inputs = prepare_inputs(val_img);
+    let valid_labels = prepare_labels(val_lbl);
     let test_inputs = prepare_inputs(tst_img);
     let test_labels = prepare_labels(tst_lbl);
 
+/*
     // Best results so far with leaky reLu, alpha=0.01, batch_size=50, epochs=500
-    let mut network = NeuralNetwork::init_params(vec![400, 200, 100, 10], 50);
-    let (loss, accuracies) = network.train(&train_inputs, &train_labels, &validation_inputs, &validation_labels, 100);
+    let mut network = NeuralNetwork::init_params(vec![100, 10], 1);
+    let (loss, accuracies) = network.train(&train_inputs, &train_labels, &valid_inputs, &valid_labels, 1);
     let smooth_loss = loss_moving_average(loss);
     plot_loss(smooth_loss);
     plot_accuracy(accuracies);
@@ -318,4 +324,20 @@ fn main() {
     draw_digit(&train_inputs[example_index]);
     let prediction = network.predict(&train_inputs[example_index]);
     println!("Prediction : {}, Label : {}", prediction.argmax().0, train_labels[example_index].argmax().0);
+*/
+
+
+    // Matrix init for softmax ????
+    let mut network = Network::new(
+        vec![
+            Box::new(Dense::new(784, 100)),
+            Box::new(LeakyReLU::new(100)),
+            Box::new(Dense::new(100, 10)),
+            Box::new(SoftMax::new(10))
+        ]
+    );
+
+    network.train(&train_inputs, &train_labels, &valid_inputs, &valid_labels, 1);
+    let accuracy = network.test_accuracy(&test_inputs, &test_labels);
+    println!("Results : {}% success rate", accuracy * 100.0);
 }
