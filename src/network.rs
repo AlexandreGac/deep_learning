@@ -1,12 +1,14 @@
 use std::fmt::Write;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use nalgebra::{DMatrix, DVector};
+use nalgebra::{DVector};
 use plotters::backend::BitMapBackend;
 use plotters::chart::{ChartBuilder, LabelAreaPosition};
 use plotters::prelude::{BLUE, IntoDrawingArea, LineSeries, WHITE};
 use plotters::prelude::full_palette::ORANGE;
 use rayon::prelude::*;
 use crate::layer::Layer;
+
+const LEARNING_RATE: f32 = 0.001;
 
 pub struct Network {
     layers: Vec<Box<dyn Layer + Send + Sync>>
@@ -20,44 +22,49 @@ impl Network {
         }
     }
 
-    fn forward_propagation(&mut self, input: DVector<f32>) -> DVector<f32> {
-        let mut output = input;
+    fn forward_propagation(&mut self, input_batch: &[DVector<f32>]) -> Vec<DVector<f32>> {
+        let mut output = input_batch.to_vec();
         for layer in self.layers.iter_mut() {
             output = layer.forward_propagation(output);
         }
         output
     }
 
-    fn backward_propagation(&mut self, cost_derivative: DVector<f32>) {
-        let learning_rate = 0.002;
-        let mut factor = cost_derivative;
+    fn backward_propagation(&mut self, cost_derivative_batch: Vec<DVector<f32>>, iteration: i32) {
+        let mut factor_batch = cost_derivative_batch;
         for layer in self.layers.iter_mut().rev() {
-            factor = layer.backward_propagation(factor, learning_rate);
+            factor_batch = layer.backward_propagation(factor_batch, LEARNING_RATE, iteration);
         }
     }
 
-    fn cost(output: &DVector<f32>, target: &DVector<f32>) -> f32 {
-        let n = target.len();
-        -DVector::<f32>::from_fn(n, |i, _| target[i] * output[i].ln()).sum()
+    fn cost(output_batch: &Vec<DVector<f32>>, target_batch: &[DVector<f32>]) -> Vec<f32> {
+        output_batch.par_iter().enumerate().map(|(k, output)| {
+            let n = target_batch[k].len();
+            -DVector::<f32>::from_fn(n, |i, _| target_batch[k][i] * output[i].ln().max(f32::MIN)).sum()
+        }).collect()
     }
 
-    fn grad_cost(output: &DVector<f32>, target: &DVector<f32>) -> DVector<f32> {
-        let n = target.len();
-        -DVector::<f32>::from_fn(n, |i, _| target[i] / output[i])
+    fn grad_cost(output_batch: &Vec<DVector<f32>>, target_batch: &[DVector<f32>]) -> Vec<DVector<f32>> {
+        output_batch.par_iter().enumerate().map(|(k, output)| {
+            let n = target_batch[k].len();
+            -DVector::<f32>::from_fn(n, |i, _| if output[i] == 0.0 { 0.0 } else { target_batch[k][i] / output[i] })
+        }).collect()
     }
 
-    fn validate(&mut self, validation_inputs: &Vec<DVector<f32>>, validation_outputs: &Vec<DVector<f32>>) -> f32 {
-        let accuracy = (0..validation_inputs.len()).into_iter().map(|i| {
-            let prediction = self.predict(&validation_inputs[i]);
+    fn validate(&mut self, validation_inputs: &[DVector<f32>], validation_outputs: &[DVector<f32>]) -> f32 {
+        let prediction_batch = self.predict(validation_inputs);
+        let accuracy = prediction_batch.par_iter().enumerate().map(|(i, prediction)| {
             if prediction.argmax().0 == validation_outputs[i].argmax().0 { 1.0 } else { 0.0 }
         }).sum::<f32>() / validation_outputs.len() as f32;
-
         accuracy
     }
 
-    pub fn train(&mut self, train_inputs: &Vec<DVector<f32>>, train_outputs: &Vec<DVector<f32>>, valid_inputs: &Vec<DVector<f32>>, valid_outputs: &Vec<DVector<f32>>, epochs: usize) {
+    pub fn train(&mut self, train_inputs: &Vec<DVector<f32>>, train_outputs: &Vec<DVector<f32>>, valid_inputs: &Vec<DVector<f32>>, valid_outputs: &Vec<DVector<f32>>, batch_size: usize, epochs: usize) {
         let n = train_inputs.len();
-        let n_batches = n;
+        let n_batches = n.div_ceil(batch_size);
+        let train_input_batches = prepare_batches(train_inputs, batch_size);
+        let train_output_batches = prepare_batches(train_outputs, batch_size);
+
         let mut loss_curve = vec![];
         let mut accuracy_curve = vec![];
 
@@ -67,14 +74,16 @@ impl Network {
             .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f32()).unwrap())
             .progress_chars("=> "));
 
+        let mut iteration = 0;
         for epoch in 0..epochs {
-            for i in 0..n {
-                let output = self.forward_propagation(train_inputs[i].clone());
-                self.backward_propagation(Self::grad_cost(&output, &train_outputs[i]));
-                let cost = Network::cost(&output, &train_outputs[i]);
-                loss_curve.push(cost);
+            for i in 0..n_batches {
+                iteration += 1;
+                let output_batch = self.forward_propagation(train_input_batches[i]);
+                self.backward_propagation(Self::grad_cost(&output_batch, train_output_batches[i]), iteration);
+                let mean_cost = Network::cost(&output_batch, train_output_batches[i]).iter().sum::<f32>()
+                    / output_batch.len() as f32;
 
-                if cost.is_nan() {
+                if mean_cost.is_nan() {
                     pb.abandon();
                     plot_loss(loss_curve);
                     plot_accuracy(accuracy_curve);
@@ -82,6 +91,7 @@ impl Network {
                     return
                 }
 
+                loss_curve.push(mean_cost);
                 pb.inc(1);
                 pb.set_message(format!(
                     "Progress : {:.1}%, {}/{} batches, epoch {}/{}",
@@ -102,9 +112,13 @@ impl Network {
         self.validate(test_inputs, test_outputs)
     }
 
-    pub fn predict(&mut self, input: &DVector<f32>) -> DVector<f32> {
-        self.forward_propagation(input.clone())
+    pub fn predict(&mut self, input_batch: &[DVector<f32>]) -> Vec<DVector<f32>> {
+        self.forward_propagation(input_batch)
     }
+}
+
+fn prepare_batches(data: &Vec<DVector<f32>>, batch_size: usize) -> Vec<&[DVector<f32>]> {
+    data.chunks(batch_size).collect()
 }
 
 fn plot_loss(loss: Vec<f32>) {
@@ -117,7 +131,7 @@ fn plot_loss(loss: Vec<f32>) {
         .set_label_area_size(LabelAreaPosition::Left, 40)
         .set_label_area_size(LabelAreaPosition::Bottom, 40)
         .caption("Loss Curve", ("sans-serif", 40))
-        .build_cartesian_2d(0.0..(n as f64), 0.0..1.0)
+        .build_cartesian_2d(0.0..(n as f64), 0.0..0.5)
         .unwrap();
 
     chart.configure_mesh().draw().unwrap();
@@ -140,7 +154,7 @@ fn plot_accuracy(accuracy: Vec<f32>) {
         .set_label_area_size(LabelAreaPosition::Left, 40)
         .set_label_area_size(LabelAreaPosition::Bottom, 40)
         .caption("Accuracy Curve", ("sans-serif", 40))
-        .build_cartesian_2d(0.0..(n as f64), 0.9..1.0)
+        .build_cartesian_2d(0.0..(n as f64), 0.92..1.0)
         .unwrap();
 
     chart.configure_mesh().draw().unwrap();
