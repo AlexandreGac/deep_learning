@@ -1,9 +1,11 @@
 mod layer;
 mod network;
+mod utils;
+mod tests;
 
 use nalgebra::DVector;
 use mnist::*;
-use crate::layer::{Dense, LeakyReLU, SoftMax};
+use crate::layer::{Conv2D, Dense, LeakyReLU, MaxPooling2D, SoftMax};
 use crate::network::Network;
 
 /*
@@ -73,16 +75,20 @@ fn main() {
 
     let mut network = Network::new(
         vec![
-            Box::new(Dense::new(784, 100)),
+            Box::new(Conv2D::new((1, 28, 28), (3, 3), 8)),
             Box::new(LeakyReLU::new()),
-            Box::new(Dense::new(100, 100)),
+            Box::new(MaxPooling2D::new((8, 26, 26), (2, 2))),
+            Box::new(Conv2D::new((8, 13, 13), (3, 3), 16)),
             Box::new(LeakyReLU::new()),
-            Box::new(Dense::new(100, 10)),
+            Box::new(MaxPooling2D::new((16, 11, 11), (2, 2))),
+            Box::new(Dense::new(16 * 6 * 6, 80)),
+            Box::new(LeakyReLU::new()),
+            Box::new(Dense::new(80, 10)),
             Box::new(SoftMax::new())
         ]
     );
 
-    network.train(&train_inputs, &train_labels, &valid_inputs, &valid_labels, 512, 16);
+    network.train(&train_inputs, &train_labels, &valid_inputs, &valid_labels, 32, 32);
     let accuracy = network.test_accuracy(&test_inputs, &test_labels);
-    println!("Results : {}% success rate", accuracy * 100.0);
+    println!("Results : {:.2}% success rate", accuracy * 100.0);
 }

@@ -1,10 +1,6 @@
 use nalgebra::{DMatrix, DVector};
-use rand_distr::Normal;
 use rayon::prelude::*;
-
-const BETA_1: f32 = 0.9;
-const BETA_2: f32 = 0.999;
-const EPSILON: f32 = 10e-8;
+use crate::utils::*;
 
 pub trait Layer {
     fn forward_propagation(&mut self, input_batch: Vec<DVector<f32>>) -> Vec<DVector<f32>>;
@@ -25,7 +21,7 @@ pub struct Dense {
 impl Dense {
     pub fn new(input_size: usize, output_size: usize) -> Self {
         Dense {
-            weights: Self::he_init(input_size, output_size),
+            weights: he_init_dense(input_size, output_size),
             bias: DVector::<f32>::zeros(output_size),
 
             last_input_batch: vec![],
@@ -34,33 +30,6 @@ impl Dense {
             bias_first_moment: DVector::<f32>::zeros(output_size),
             bias_second_moment: DVector::<f32>::zeros(output_size),
         }
-    }
-
-    fn he_init(input_size: usize, output_size: usize) -> DMatrix<f32> {
-        let rng = &mut rand::thread_rng();
-        DMatrix::<f32>::from_distribution(
-            output_size, input_size,
-            &Normal::new(0.0, f32::sqrt(2.0 / input_size as f32)).unwrap(),
-            rng
-        )
-    }
-
-    fn adam_optimizer(&mut self, weights_gradient: DMatrix<f32>, bias_gradient: DVector<f32>, learning_rate: f32, iteration: i32) {
-        let weights_gradient_squared = weights_gradient.component_mul(&weights_gradient);
-        self.weight_first_moment = BETA_1 * self.weight_first_moment.clone() + (1.0 - BETA_1) * weights_gradient;
-        self.weight_second_moment = BETA_2 * self.weight_second_moment.clone() + (1.0 - BETA_2) * weights_gradient_squared;
-        let weight_corrected_first_moment = self.weight_first_moment.clone() / (1.0 - BETA_1.powi(iteration));
-        let weight_corrected_second_moment = self.weight_second_moment.clone() / (1.0 - BETA_2.powi(iteration));
-        let weight_denominator = weight_corrected_second_moment.map(|w| w.sqrt() + EPSILON);
-        self.weights -= learning_rate * weight_corrected_first_moment.component_div(&weight_denominator);
-
-        let bias_gradient_squared = bias_gradient.component_mul(&bias_gradient);
-        self.bias_first_moment = BETA_1 * self.bias_first_moment.clone() + (1.0 - BETA_1) * bias_gradient;
-        self.bias_second_moment = BETA_2 * self.bias_second_moment.clone() + (1.0 - BETA_2) * bias_gradient_squared;
-        let bias_corrected_first_moment = self.bias_first_moment.clone() / (1.0 - BETA_1.powi(iteration));
-        let bias_corrected_second_moment = self.bias_second_moment.clone() / (1.0 - BETA_2.powi(iteration));
-        let bias_denominator = bias_corrected_second_moment.map(|b| b.sqrt() + EPSILON);
-        self.bias -= learning_rate * bias_corrected_first_moment.component_div(&bias_denominator);
     }
 }
 
@@ -86,7 +55,211 @@ impl Layer for Dense {
         }).collect::<Vec<_>>().iter().sum::<DMatrix<f32>>() / m;
         let bias_gradient = factor_batch.iter().sum::<DVector<f32>>() / m;
 
-        self.adam_optimizer(weights_gradient, bias_gradient, learning_rate, iteration);
+        adam_optimizer_matrix(
+            &mut self.weights, weights_gradient, &mut self.weight_first_moment,
+            &mut self.weight_second_moment, learning_rate, iteration
+        );
+        adam_optimizer_vector(
+            &mut self.bias, bias_gradient, &mut self.bias_first_moment,
+            &mut self.bias_second_moment, learning_rate, iteration
+        );
+        back_factor_batch
+    }
+}
+
+pub struct Conv2D {
+    input_shape: (usize, usize, usize),
+    output_shape: (usize, usize, usize),
+    kernels: Vec<Vec<DMatrix<f32>>>,
+    bias: Vec<DMatrix<f32>>,
+
+    last_input_batch: Vec<Vec<DMatrix<f32>>>,
+    kernels_first_moment: Vec<Vec<DMatrix<f32>>>,
+    kernels_second_moment: Vec<Vec<DMatrix<f32>>>,
+    bias_first_moment: Vec<DMatrix<f32>>,
+    bias_second_moment: Vec<DMatrix<f32>>
+}
+
+impl Conv2D {
+    pub fn new(input_shape: (usize, usize, usize), kernels_shape: (usize, usize), output_features: usize) -> Self {
+        let mut kernels = vec![];
+        for _ in 0..output_features {
+            let mut kernels_weights = vec![];
+            for _ in 0..input_shape.0 {
+                kernels_weights.push(he_init_conv2d(kernels_shape.0, kernels_shape.1, input_shape.0));
+            }
+            kernels.push(kernels_weights);
+        }
+
+        let (n_rows, n_cols) = (input_shape.1 - kernels_shape.0 + 1, input_shape.2 - kernels_shape.1 + 1);
+        let bias = vec![DMatrix::<f32>::zeros(n_rows, n_cols); output_features];
+
+        Self {
+            input_shape,
+            output_shape: (output_features, n_rows, n_cols),
+            kernels,
+            bias,
+
+            last_input_batch: vec![],
+            kernels_first_moment: vec![vec![DMatrix::<f32>::zeros(kernels_shape.0, kernels_shape.1); input_shape.0]; output_features],
+            kernels_second_moment: vec![vec![DMatrix::<f32>::zeros(kernels_shape.0, kernels_shape.1); input_shape.0]; output_features],
+            bias_first_moment: vec![DMatrix::<f32>::zeros(n_rows, n_cols); output_features],
+            bias_second_moment: vec![DMatrix::<f32>::zeros(n_rows, n_cols); output_features]
+        }
+    }
+}
+
+impl Layer for Conv2D {
+    fn forward_propagation(&mut self, input_batch: Vec<DVector<f32>>) -> Vec<DVector<f32>> {
+        self.last_input_batch = input_batch.into_par_iter().map(|input| {
+            let length = self.input_shape.1 * self.input_shape.2;
+            (0..self.input_shape.0).map(|depth|
+                DMatrix::<f32>::from_column_slice(
+                    self.input_shape.1, self.input_shape.2,
+                    &input.as_slice()[(depth * length)..(depth * length + length)]
+                )
+            ).collect::<Vec<_>>()
+        }).collect();
+
+        let result_batch = self.last_input_batch.par_iter().map(|features| {
+            let (output_depth, n_rows, n_cols) = self.output_shape;
+            let mut result_data = vec![];
+            for depth in 0..output_depth {
+                let cross_correlation = features.iter().enumerate().map(|(k, feature)| {
+                    valid_cross_correlation(feature, &self.kernels[depth][k], n_rows, n_cols)
+                }).sum::<DMatrix<f32>>() + &self.bias[depth];
+                result_data.extend_from_slice(cross_correlation.as_slice());
+            }
+            DVector::<f32>::from(result_data)
+        }).collect();
+
+        result_batch
+    }
+
+    fn backward_propagation(&mut self, factor_batch: Vec<DVector<f32>>, learning_rate: f32, iteration: i32) -> Vec<DVector<f32>> {
+        let m = factor_batch.len() as f32;
+        let (output_depth, output_n_rows, output_n_cols) = self.output_shape;
+        let length = output_n_rows * output_n_cols;
+
+        let back_factor_batch = factor_batch.par_iter().map(|factor| {
+            let mut back_factor_data = vec![];
+            for j in 0..self.input_shape.0 {
+                let convolution = (0..self.kernels.len()).map(|i| {
+                    let factor_i = DMatrix::<f32>::from_column_slice(
+                        output_n_rows, output_n_cols,
+                        &factor.as_slice()[(i * length)..(i * length + length)]
+                    );
+                    full_convolution(&factor_i, &self.kernels[i][j], self.input_shape.1, self.input_shape.2)
+                }).sum::<DMatrix<f32>>();
+                back_factor_data.extend_from_slice(convolution.as_slice());
+            }
+            DVector::<f32>::from(back_factor_data)
+        }).collect();
+
+        for i in 0..output_depth {
+            for j in 0..self.input_shape.0 {
+                let kernel_gradient = factor_batch.par_iter().enumerate().map(|(k, factor)| {
+                    let factor_i = DMatrix::<f32>::from_column_slice(
+                        output_n_rows, output_n_cols,
+                        &factor.as_slice()[(i * length)..(i * length + length)]
+                    );
+                    valid_cross_correlation(&self.last_input_batch[k][j], &factor_i, self.kernels[i][j].shape().0, self.kernels[i][j].shape().1)
+                }).collect::<Vec<_>>().iter().sum::<DMatrix<f32>>() / m;
+                adam_optimizer_matrix(
+                    &mut self.kernels[i][j], kernel_gradient, &mut self.kernels_first_moment[i][j],
+                    &mut self.kernels_second_moment[i][j], learning_rate, iteration
+                );
+            }
+        }
+
+        for i in 0..output_depth {
+            let bias_gradient = factor_batch.iter().map(|factor| {
+                DMatrix::<f32>::from_column_slice(
+                    output_n_rows, output_n_cols,
+                    &factor.as_slice()[(i * length)..(i * length + length)]
+                )
+            }).sum::<DMatrix<f32>>() / m;
+            adam_optimizer_matrix(
+                &mut self.bias[i], bias_gradient, &mut self.bias_first_moment[i],
+                &mut self.bias_second_moment[i], learning_rate, iteration
+            );
+        }
+
+        back_factor_batch
+    }
+}
+
+pub struct MaxPooling2D {
+    input_shape: (usize, usize, usize),
+    output_shape: (usize, usize, usize),
+    pooling_window: (usize, usize),
+
+    pool_indices: Vec<Vec<(usize, usize)>>
+}
+
+impl MaxPooling2D {
+    pub fn new(input_shape: (usize, usize, usize), pooling_window: (usize, usize)) -> Self {
+        let output_n_rows = input_shape.1.div_ceil(pooling_window.0);
+        let output_n_cols = input_shape.2.div_ceil(pooling_window.1);
+        Self {
+            input_shape,
+            output_shape: (input_shape.0, output_n_rows, output_n_cols),
+            pooling_window,
+            pool_indices: vec![],
+        }
+    }
+}
+
+impl Layer for MaxPooling2D {
+    fn forward_propagation(&mut self, input_batch: Vec<DVector<f32>>) -> Vec<DVector<f32>> {
+        let output_length = self.output_shape.0 * self.output_shape.1 * self.output_shape.2;
+        let (result_batch, pool_indices): (Vec<_>, Vec<_>) = input_batch.par_iter().map(|input| {
+            let (result_data, result_indices): (Vec<f32>, Vec<(usize, usize)>) = (0..output_length).map(|n| {
+                let (depth, i, j) = index_to_coords(self.output_shape, n);
+                let window_size = (
+                    usize::min(self.pooling_window.0, self.input_shape.1 - i * self.pooling_window.0),
+                    usize::min(self.pooling_window.1, self.input_shape.2 - j * self.pooling_window.1)
+                );
+                let mut max = f32::NEG_INFINITY;
+                let mut pool_indices = (0, 0);
+                for k in 0..window_size.0 {
+                    let i_input = i * self.pooling_window.0 + k;
+                    for l in 0..window_size.1 {
+                        let j_input = j * self.pooling_window.1 + l;
+                        let index = coords_to_index(self.input_shape, depth, i_input, j_input);
+                        let value = *input.index(index);
+                        if value > max {
+                            max = value;
+                            pool_indices = (k, l);
+                        }
+                    }
+                }
+                (max, pool_indices)
+            }).unzip();
+
+            (DVector::<f32>::from(result_data), result_indices)
+        }).unzip();
+
+        self.pool_indices = pool_indices;
+        result_batch
+    }
+
+    fn backward_propagation(&mut self, factor_batch: Vec<DVector<f32>>, _learning_rate: f32, _iteration: i32) -> Vec<DVector<f32>> {
+        let input_length = self.input_shape.0 * self.input_shape.1 * self.input_shape.2;
+        let back_factor_batch = factor_batch.par_iter().enumerate().map(|(k, factor)| {
+            DVector::<f32>::from_fn(input_length, |n, _| {
+                let (depth, i, j) = index_to_coords(self.input_shape, n);
+                let i_output = i / self.pooling_window.0;
+                let j_output = j / self.pooling_window.1;
+                let index = coords_to_index(self.output_shape, depth, i_output, j_output);
+                if (i - i_output * self.pooling_window.0, j - j_output * self.pooling_window.1) == self.pool_indices[k][index] {
+                    factor[index]
+                }
+                else {
+                    0.0
+                }
+            })
+        }).collect();
         back_factor_batch
     }
 }
